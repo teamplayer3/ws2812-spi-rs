@@ -104,7 +104,7 @@ where
         }
     }
 
-    fn send_data(&mut self) -> Result<(), E> {
+    pub fn send_data(&mut self) -> Result<(), E> {
         // We introduce an offset in the fifo here, so there's always one byte in transit
         // Some MCUs (like the stm32f1) only a one byte fifo, which would result
         // in overrun error if two bytes need to be stored
