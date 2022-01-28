@@ -115,8 +115,8 @@ where
                 block!(self.spi.read())?;
             }
         }
-        for b in self.data[..self.index].iter() {
-            block!(self.spi.send(*b))?;
+        for b in self.data {
+            block!(self.spi.send(b))?;
             block!(self.spi.read())?;
         }
         for _ in 0..140 {
