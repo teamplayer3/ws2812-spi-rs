@@ -7,9 +7,7 @@ use embedded_hal as hal;
 
 use hal::spi::{FullDuplex, Mode, Phase, Polarity};
 
-use core::marker::PhantomData;
-
-use smart_leds_trait::{SmartLedsWrite, RGB8, RGBW};
+use smart_leds_trait::{SmartLedsWrite, RGB, RGB8};
 
 use nb;
 use nb::block;
@@ -23,30 +21,18 @@ pub const MODE: Mode = Mode {
     phase: Phase::CaptureOnFirstTransition,
 };
 
-pub mod devices {
-    pub struct Ws2812;
-    pub struct Sk6812w;
-
-    pub trait Device {}
-
-    impl Device for Ws2812 {}
-    impl Device for Sk6812w {}
-}
-
-pub struct Ws2812<SPI, DEVICE: devices::Device, const N: usize>
+pub struct Ws2812<SPI, const N: usize>
 where
     [u8; N * 3]: Sized,
 {
     spi: SPI,
     data: [u8; N * 3],
     index: usize,
-    device: PhantomData<DEVICE>,
 }
 
-impl<SPI, DEVICE, E, const N: usize> Ws2812<SPI, DEVICE, N>
+impl<SPI, E, const N: usize> Ws2812<SPI, N>
 where
     SPI: FullDuplex<u8, Error = E>,
-    DEVICE: devices::Device,
     [u8; N * 3]: Sized,
 {
     /// Use ws2812 devices via spi
@@ -65,43 +51,43 @@ where
             spi,
             data: [0; N * 3],
             index: 0,
-            device: PhantomData {},
         }
     }
 }
 
-impl<SPI, E, const N: usize> Ws2812<SPI, devices::Sk6812w, N>
+impl<SPI, E, const N: usize> Ws2812<SPI, N>
 where
     SPI: FullDuplex<u8, Error = E>,
     [u8; N * 3]: Sized,
 {
-    /// Use sk6812w devices via spi
-    ///
-    /// The SPI bus should run within 2.3 MHz to 3.8 MHz at least.
-    ///
-    /// You may need to look at the datasheet and your own hal to verify this.
-    ///
-    /// You need to provide a buffer `data`, whoose length is at least 12 * the
-    /// length of the led strip
-    ///
-    /// Please ensure that the mcu is pretty fast, otherwise weird timing
-    /// issues will occur
-    // The spi frequencies are just the limits, the available timing data isn't
-    // complete
-    pub fn new_sk6812w(spi: SPI) -> Self {
-        Self {
-            spi,
-            data: [0; N * 3],
-            index: 0,
-            device: PhantomData {},
-        }
+    pub fn value_at(&self, index: usize) -> u8 {
+        self.data[index]
+    }
+
+    pub fn led_color(&self, index: usize) -> RGB8 {
+        let offset = index * 3;
+        RGB::new(
+            self.data[offset],
+            self.data[offset + 1],
+            self.data[offset + 2],
+        )
+    }
+
+    pub fn set_value_at(&mut self, index: usize, value: u8) {
+        self.data[index] = value;
+    }
+
+    pub fn set_led_color(&mut self, index: usize, color: RGB8) {
+        let offset = index * 3;
+        self.data[offset] = color.r;
+        self.data[offset + 1] = color.g;
+        self.data[offset + 2] = color.b;
     }
 }
 
-impl<SPI, D, E, const N: usize> Ws2812<SPI, D, N>
+impl<SPI, E, const N: usize> Ws2812<SPI, N>
 where
     SPI: FullDuplex<u8, Error = E>,
-    D: devices::Device,
     [u8; N * 3]: Sized,
 {
     /// Write a single byte for ws2812 devices
@@ -143,7 +129,7 @@ where
     }
 }
 
-impl<SPI, E, const N: usize> SmartLedsWrite for Ws2812<SPI, devices::Ws2812, N>
+impl<SPI, E, const N: usize> SmartLedsWrite for Ws2812<SPI, N>
 where
     SPI: FullDuplex<u8, Error = E>,
     [u8; N * 3]: Sized,
@@ -163,32 +149,6 @@ where
             self.write_byte(item.g);
             self.write_byte(item.r);
             self.write_byte(item.b);
-        }
-        self.send_data()
-    }
-}
-
-impl<SPI, E, const N: usize> SmartLedsWrite for Ws2812<SPI, devices::Sk6812w, N>
-where
-    SPI: FullDuplex<u8, Error = E>,
-    [u8; N * 3]: Sized,
-{
-    type Error = E;
-    type Color = RGBW<u8, u8>;
-    /// Write all the items of an iterator to a ws2812 strip
-    fn write<T, I>(&mut self, iterator: T) -> Result<(), E>
-    where
-        T: Iterator<Item = I>,
-        I: Into<Self::Color>,
-    {
-        self.index = 0;
-
-        for item in iterator {
-            let item = item.into();
-            self.write_byte(item.g);
-            self.write_byte(item.r);
-            self.write_byte(item.b);
-            self.write_byte(item.a.0);
         }
         self.send_data()
     }
