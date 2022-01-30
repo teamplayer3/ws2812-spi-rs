@@ -7,7 +7,7 @@ use embedded_hal as hal;
 
 use hal::spi::{FullDuplex, Mode, Phase, Polarity};
 
-use smart_leds_trait::{SmartLedsWrite, RGB, RGB8};
+use smart_leds_trait::{RGB, RGB8};
 
 use nb;
 use nb::block;
@@ -27,7 +27,6 @@ where
 {
     spi: SPI,
     data: [u8; N * 3],
-    index: usize,
 }
 
 impl<SPI, E, const N: usize> Ws2812<SPI, N>
@@ -35,13 +34,16 @@ where
     SPI: FullDuplex<u8, Error = E>,
     [u8; N * 3]: Sized,
 {
+    // Byte amount to represent a color. Must be same value as array size factor.
+    const CHANNEL_AMOUNT: usize = 3;
+
     /// Use ws2812 devices via spi
     ///
     /// The SPI bus should run within 2 MHz to 3.8 MHz
     ///
     /// You may need to look at the datasheet and your own hal to verify this.
     ///
-    /// You need to provide a buffer `data`, whoose length is at least 12 * the
+    /// You need to provide a buffer `data`, whose length is at least 12 * the
     /// length of the led strip + 20 byes (or 40, if using the `mosi_idle_high` feature)
     ///
     /// Please ensure that the mcu is pretty fast, otherwise weird timing
@@ -50,7 +52,6 @@ where
         Self {
             spi,
             data: [0; N * 3],
-            index: 0,
         }
     }
 }
@@ -67,20 +68,16 @@ where
     pub fn led_color(&self, index: usize) -> RGB8 {
         let offset = index * 3;
         RGB::new(
-            self.data[offset],
             self.data[offset + 1],
+            self.data[offset],
             self.data[offset + 2],
         )
     }
 
-    pub fn set_value_at(&mut self, index: usize, value: u8) {
-        self.data[index] = value;
-    }
-
     pub fn set_led_color(&mut self, index: usize, color: RGB8) {
-        let offset = index * 3;
-        self.data[offset] = color.r;
-        self.data[offset + 1] = color.g;
+        let offset = index * Self::CHANNEL_AMOUNT;
+        self.data[offset] = color.g;
+        self.data[offset + 1] = color.r;
         self.data[offset + 2] = color.b;
     }
 }
@@ -90,23 +87,25 @@ where
     SPI: FullDuplex<u8, Error = E>,
     [u8; N * 3]: Sized,
 {
-    /// Write a single byte for ws2812 devices
-    fn write_byte(&mut self, mut data: u8) {
+    /// Write a single byte for ws2812 devices to spi
+    fn send_byte(&mut self, mut value: u8) -> Result<(), E> {
         // Send two bits in one spi byte. High time first, then the low time
         // The maximum for T0H is 500ns, the minimum for one bit 1063 ns.
         // These result in the upper and lower spi frequency limits
         let patterns = [0b1000_1000, 0b1000_1110, 0b11101000, 0b11101110];
         for _ in 0..4 {
-            let bits = (data & 0b1100_0000) >> 6;
-            self.data[self.index] = patterns[bits as usize];
-            self.index += 1;
-            data <<= 2;
+            let bits = (value & 0b1100_0000) >> 6;
+            block!(self.spi.send(patterns[bits as usize]))?;
+            value <<= 2;
         }
+
+        Ok(())
     }
 
+    /// Send the pre rendered data to the LEDs.
     pub fn send_data(&mut self) -> Result<(), E> {
-        // We introduce an offset in the fifo here, so there's always one byte in transit
-        // Some MCUs (like the stm32f1) only a one byte fifo, which would result
+        // We introduce an offset in the FIFO here, so there's always one byte in transit
+        // Some MCUs (like the stm32f1) only a one byte FIFO, which would result
         // in overrun error if two bytes need to be stored
         block!(self.spi.send(0))?;
         if cfg!(feature = "mosi_idle_high") {
@@ -116,7 +115,7 @@ where
             }
         }
         for b in self.data {
-            block!(self.spi.send(b))?;
+            self.send_byte(b)?;
             block!(self.spi.read())?;
         }
         for _ in 0..140 {
@@ -126,30 +125,5 @@ where
         // Now, resolve the offset we introduced at the beginning
         block!(self.spi.read())?;
         Ok(())
-    }
-}
-
-impl<SPI, E, const N: usize> SmartLedsWrite for Ws2812<SPI, N>
-where
-    SPI: FullDuplex<u8, Error = E>,
-    [u8; N * 3]: Sized,
-{
-    type Error = E;
-    type Color = RGB8;
-    /// Write all the items of an iterator to a ws2812 strip
-    fn write<T, I>(&mut self, iterator: T) -> Result<(), E>
-    where
-        T: Iterator<Item = I>,
-        I: Into<Self::Color>,
-    {
-        self.index = 0;
-
-        for item in iterator {
-            let item = item.into();
-            self.write_byte(item.g);
-            self.write_byte(item.r);
-            self.write_byte(item.b);
-        }
-        self.send_data()
     }
 }
